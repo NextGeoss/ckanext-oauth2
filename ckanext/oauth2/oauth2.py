@@ -65,6 +65,8 @@ class OAuth2Helper(object):
         self.profile_api_mail_field = config.get('ckan.oauth2.profile_api_mail_field', None)
         self.profile_api_groupmembership_field = config.get('ckan.oauth2.profile_api_groupmembership_field', None)
         self.sysadmin_group_name = config.get('ckan.oauth2.sysadmin_group_name', None)
+        # Hack to let us manage sysadmin rights without even if we can't configure the UM
+        self.sysadmin_email_domain = config.get('ckan.oauth2.sysadmin_email_domain', None)
 
 
         # Init db
@@ -161,6 +163,9 @@ class OAuth2Helper(object):
                     user.sysadmin = True
                 else:
                     user.sysadmin = False
+            # Hack to let us manage sysadmin rights without even if we can't configure the UM
+            if self.sysadmin_email_domain in self.profile_api_mail_field:
+                user.sysadmin = True
 
             # Save the user in the database
             model.Session.add(user)
