@@ -140,7 +140,7 @@ class OAuth2Helper(object):
 
             # Only allow users with authorization from the UM
             authorized = user_data.get("discoveryUserBeta", False)
-            if authorized != True:
+            if authorized != "true":
                 base.abort(403, _('Not authorized to see this page'))
 
             email = user_data[self.profile_api_mail_field]
