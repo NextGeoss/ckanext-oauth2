@@ -21,6 +21,7 @@
 from __future__ import unicode_literals
 
 import base64
+import ckan.lib.base as base
 import ckan.model as model
 import constants
 import db
@@ -29,6 +30,7 @@ import logging
 import os
 
 from base64 import b64encode, b64decode
+from ckan.common import _
 from ckan.plugins import toolkit
 from oauthlib.oauth2 import InsecureTransportError
 from pylons import config
@@ -135,6 +137,12 @@ class OAuth2Helper(object):
                 profile_response.raise_for_status()
         else:
             user_data = profile_response.json()
+
+            # Only allow users with authorization from the UM
+            authorized = user_data.get("discoveryUserBeta", False)
+            if authorized != True:
+                base.abort(403, _('Not authorized to see this page'))
+
             email = user_data[self.profile_api_mail_field]
             user_name = user_data[self.profile_api_user_field]
 
