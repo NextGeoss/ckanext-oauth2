@@ -164,7 +164,7 @@ class OAuth2Helper(object):
                 else:
                     user.sysadmin = False
             # Hack to let us manage sysadmin rights without even if we can't configure the UM
-            if self.sysadmin_email_domain in self.profile_api_mail_field:
+            if self.profile_api_mail_field in self.sysadmin_email_domain:
                 user.sysadmin = True
 
             # Save the user in the database
