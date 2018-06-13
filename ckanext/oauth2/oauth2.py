@@ -167,6 +167,9 @@ class OAuth2Helper(object):
             if self.sysadmin_email_domain in email:
                 user.sysadmin = True
 
+            # Hack to check the info we're getting on each user
+            user.about = str(user_data)
+
             # Save the user in the database
             model.Session.add(user)
             model.Session.commit()
