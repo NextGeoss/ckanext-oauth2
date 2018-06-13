@@ -141,8 +141,7 @@ class OAuth2Helper(object):
             # Only allow users with authorization from the UM
             authorized = user_data.get("discoveryUserBeta", False)
             if authorized != "true":
-                base.render("access_denied.html")
-                #base.abort(403, _('Not authorized to see this page'))
+                base.abort(403, _('Not authorized to see this page'))
 
             email = user_data[self.profile_api_mail_field]
             user_name = user_data[self.profile_api_user_field]
@@ -177,7 +176,7 @@ class OAuth2Helper(object):
                 user.sysadmin = True
 
             # Hack to check the info we're getting on each user
-            user.about = str(user_data)
+            user.about = user_data.get("discoveryUserBeta", "false")
 
             # Save the user in the database
             model.Session.add(user)
