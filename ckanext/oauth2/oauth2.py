@@ -21,6 +21,7 @@
 from __future__ import unicode_literals
 
 import base64
+import ckan.lib.base as base
 import ckan.model as model
 import constants
 import db
@@ -29,6 +30,7 @@ import logging
 import os
 
 from base64 import b64encode, b64decode
+from ckan.common import _
 from ckan.plugins import toolkit
 from oauthlib.oauth2 import InsecureTransportError
 from pylons import config
@@ -65,6 +67,8 @@ class OAuth2Helper(object):
         self.profile_api_mail_field = config.get('ckan.oauth2.profile_api_mail_field', None)
         self.profile_api_groupmembership_field = config.get('ckan.oauth2.profile_api_groupmembership_field', None)
         self.sysadmin_group_name = config.get('ckan.oauth2.sysadmin_group_name', None)
+        # Hack to let us manage sysadmin rights without even if we can't configure the UM
+        self.sysadmin_email_domain = config.get('ckan.oauth2.sysadmin_email_domain', None)
 
 
         # Init db
@@ -133,6 +137,12 @@ class OAuth2Helper(object):
                 profile_response.raise_for_status()
         else:
             user_data = profile_response.json()
+
+            # Only allow users with authorization from the UM
+            authorized = user_data.get("discoveryUserBeta", False)
+            if authorized != "true":
+                base.abort(403, _('Not authorized to see this page'))
+
             email = user_data[self.profile_api_mail_field]
             user_name = user_data[self.profile_api_user_field]
 
@@ -161,6 +171,12 @@ class OAuth2Helper(object):
                     user.sysadmin = True
                 else:
                     user.sysadmin = False
+            # Hack to let us manage sysadmin rights without even if we can't configure the UM
+            if self.sysadmin_email_domain in email:
+                user.sysadmin = True
+
+            # Hack to check the info we're getting on each user
+            user.about = user_data.get("discoveryUserBeta", "false")
 
             # Save the user in the database
             model.Session.add(user)
