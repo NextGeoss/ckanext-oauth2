@@ -203,7 +203,7 @@ class OAuth2Helper(object):
         state = toolkit.request.params.get('state')
         came_from = get_came_from(state)
         toolkit.response.status = 302
-        toolkit.response.location = came_from
+        toolkit.response.location = "/"
 
     def get_stored_token(self, user_name):
         user_token = db.UserToken.by_user_name(user_name=user_name)
