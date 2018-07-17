@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Copyright (c) 2014 CoNWeT Lab., Universidad Politécnica de Madrid
+# Copyright (c) 2018 Future Internet Consulting and Development Solutions S.L.
 
 # This file is part of OAuth2 CKAN Extension.
 
@@ -19,14 +20,14 @@
 
 from __future__ import unicode_literals
 
-import constants
 import logging
 import oauth2
+import os
 
 from functools import partial
 from ckan import plugins
+from ckan.common import g
 from ckan.plugins import toolkit
-from pylons import config
 from urlparse import urlparse
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,27 @@ def request_reset(context, data_dict):
     return _no_permissions(context, msg)
 
 
+def _get_previous_page(default_page):
+    if 'came_from' not in toolkit.request.params:
+        came_from_url = toolkit.request.headers.get('Referer', default_page)
+    else:
+        came_from_url = toolkit.request.params.get('came_from', default_page)
+
+    came_from_url_parsed = urlparse(came_from_url)
+
+    # Avoid redirecting users to external hosts
+    if came_from_url_parsed.netloc != '' and came_from_url_parsed.netloc != toolkit.request.host:
+        came_from_url = default_page
+
+    # When a user is being logged and REFERER == HOME or LOGOUT_PAGE
+    # he/she must be redirected to the dashboard
+    pages = ['/', '/user/logged_out_redirect']
+    if came_from_url_parsed.path in pages:
+        came_from_url = default_page
+
+    return came_from_url
+
+
 class OAuth2Plugin(plugins.SingletonPlugin):
 
     plugins.implements(plugins.IAuthenticator, inherit=True)
@@ -72,15 +94,14 @@ class OAuth2Plugin(plugins.SingletonPlugin):
         '''Store the OAuth 2 client configuration'''
         log.debug('Init OAuth2 extension')
 
-        self.register_url = config.get('ckan.oauth2.register_url', None)
-        self.reset_url = config.get('ckan.oauth2.reset_url', None)
-        self.edit_url = config.get('ckan.oauth2.edit_url', None)
-        self.authorization_header = config.get('ckan.oauth2.authorization_header', 'Authorization')
-
         self.oauth2helper = oauth2.OAuth2Helper()
 
     def before_map(self, m):
         log.debug('Setting up the redirections to the OAuth2 service')
+
+        m.connect('/user/login',
+                  controller='ckanext.oauth2.controller:OAuth2Controller',
+                  action='login')
 
         # We need to handle petitions received to the Callback URL
         # since some error can arise and we need to process them
@@ -88,7 +109,7 @@ class OAuth2Plugin(plugins.SingletonPlugin):
                   controller='ckanext.oauth2.controller:OAuth2Controller',
                   action='callback')
 
-        # # Redirect the user to the OAuth service register page
+        # Redirect the user to the OAuth service register page
         if self.register_url:
             m.redirect('/user/register', self.register_url)
 
@@ -114,6 +135,12 @@ class OAuth2Plugin(plugins.SingletonPlugin):
         apikey = toolkit.request.headers.get(self.authorization_header, '')
         user_name = None
 
+        if self.authorization_header == "authorization":
+            if apikey.startswith('Bearer '):
+                apikey = apikey[7:].strip()
+            else:
+                apikey = ''
+
         # This API Key is not the one of CKAN, it's the one provided by the OAuth2 Service
         if apikey:
             try:
@@ -129,69 +156,13 @@ class OAuth2Plugin(plugins.SingletonPlugin):
 
         # If we have been able to log in the user (via API or Session)
         if user_name:
+            g.user = user_name
             toolkit.c.user = user_name
             toolkit.c.usertoken = self.oauth2helper.get_stored_token(user_name)
             toolkit.c.usertoken_refresh = partial(_refresh_and_save_token, user_name)
         else:
+            g.user = None
             log.warn('The user is not currently logged...')
-
-    def _get_previous_page(self, default_page):
-        if 'came_from' not in toolkit.request.params:
-            came_from_url = toolkit.request.headers.get('Referer', default_page)
-        else:
-            came_from_url = toolkit.request.params.get('came_from', default_page)
-
-        came_from_url_parsed = urlparse(came_from_url)
-
-        # Avoid redirecting users to external hosts
-        if came_from_url_parsed.netloc != '' and came_from_url_parsed.netloc != toolkit.request.host:
-            came_from_url = default_page
-
-        # When a user is being logged and REFERER == HOME or LOGOUT_PAGE
-        # he/she must be redirected to the dashboard
-        pages = ['/', '/user/logged_out_redirect']
-        if came_from_url_parsed.path in pages:
-            came_from_url = default_page
-
-        return came_from_url
-
-    def login(self):
-        log.debug('login')
-
-        # Log in attemps are fired when the user is not logged in and they click
-        # on the log in button
-
-        # Get the page where the user was when the loggin attemp was fired
-        # When the user is not logged in, he/she should be redirected to the dashboard when
-        # the system cannot get the previous page
-        came_from_url = self._get_previous_page(constants.INITIAL_PAGE)
-
-        self.oauth2helper.challenge(came_from_url)
-
-    def abort(self, status_code, detail, headers, comment):
-        log.debug('abort')
-
-        # If the user is authenticated, but they cannot access a protected resource, the system
-        # should redirect them to the previous page. If the user is not redirected, the system
-        # will try to reauthenticate the user generating a redirect loop:
-        # (authenticate -> user not allowed -> auto log out -> authenticate -> ...)
-        # If the user is not authenticated, the system should start the authentication process
-
-        if toolkit.c.user:  # USER IS AUTHENTICATED
-            # When the user is logged in, he/she should be redirected to the main page when
-            # the system cannot get the previous page
-            came_from_url = self._get_previous_page('/')
-
-            # Init headers and set Location
-            if headers is None:
-                headers = {}
-            headers['Location'] = came_from_url
-
-            # 302 -> Found
-            return 302, detail, headers, comment
-        else:                # USER IS NOT AUTHENTICATED
-            # By not modifying the received parameters, the authentication process will start
-            return status_code, detail, headers, comment
 
     def get_auth_functions(self):
         # we need to prevent some actions being authorized.
@@ -203,6 +174,12 @@ class OAuth2Plugin(plugins.SingletonPlugin):
         }
 
     def update_config(self, config):
+        # Update our configuration
+        self.register_url = os.environ.get("CKAN_OAUTH2_REGISTER_URL", config.get('ckan.oauth2.register_url', None))
+        self.reset_url = os.environ.get("CKAN_OAUTH2_RESET_URL", config.get('ckan.oauth2.reset_url', None))
+        self.edit_url = os.environ.get("CKAN_OAUTH2_EDIT_URL", config.get('ckan.oauth2.edit_url', None))
+        self.authorization_header = os.environ.get("CKAN_OAUTH2_AUTHORIZATION_HEADER", config.get('ckan.oauth2.authorization_header', 'Authorization')).lower()
+
         # Add this plugin's templates dir to CKAN's extra_template_paths, so
         # that CKAN will use this plugin's custom templates.
         plugins.toolkit.add_template_directory(config, 'templates')

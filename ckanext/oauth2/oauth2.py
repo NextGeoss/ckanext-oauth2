@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Copyright (c) 2014 CoNWeT Lab., Universidad Politécnica de Madrid
+# Copyright (c) 2018 Future Internet Consulting and Development Solutions S.L.
 
 # This file is part of OAuth2 CKAN Extension.
 
@@ -23,20 +24,22 @@ from __future__ import unicode_literals
 import base64
 import ckan.lib.base as base
 import ckan.model as model
-import constants
 import db
 import json
 import logging
+from six.moves.urllib.parse import urljoin
 import os
 
 from base64 import b64encode, b64decode
 from ckan.common import _
 from ckan.plugins import toolkit
 from oauthlib.oauth2 import InsecureTransportError
-from pylons import config
 import requests
 from requests_oauthlib import OAuth2Session
 import six
+
+import constants
+
 
 log = logging.getLogger(__name__)
 
@@ -49,50 +52,53 @@ def get_came_from(state):
     return json.loads(b64decode(state)).get(constants.CAME_FROM_FIELD, '/')
 
 
+REQUIRED_CONF = ("authorization_endpoint", "token_endpoint", "client_id", "client_secret", "profile_api_url", "profile_api_user_field", "profile_api_mail_field")
+
+
 class OAuth2Helper(object):
 
     def __init__(self):
 
         self.verify_https = os.environ.get('OAUTHLIB_INSECURE_TRANSPORT', '') == ""
+        if self.verify_https and os.environ.get("REQUESTS_CA_BUNDLE", "").strip() != "":
+            self.verify_https = os.environ["REQUESTS_CA_BUNDLE"].strip()
 
-        self.authorization_endpoint = config.get('ckan.oauth2.authorization_endpoint', None)
-        self.token_endpoint = config.get('ckan.oauth2.token_endpoint', None)
-        self.profile_api_url = config.get('ckan.oauth2.profile_api_url', None)
-        self.client_id = config.get('ckan.oauth2.client_id', None)
-        self.client_secret = config.get('ckan.oauth2.client_secret', None)
-        self.scope = config.get('ckan.oauth2.scope', '').decode()
-        self.rememberer_name = config.get('ckan.oauth2.rememberer_name', None)
-        self.profile_api_user_field = config.get('ckan.oauth2.profile_api_user_field', None)
-        self.profile_api_fullname_field = config.get('ckan.oauth2.profile_api_fullname_field', None)
-        self.profile_api_mail_field = config.get('ckan.oauth2.profile_api_mail_field', None)
-        self.profile_api_groupmembership_field = config.get('ckan.oauth2.profile_api_groupmembership_field', None)
-        self.sysadmin_group_name = config.get('ckan.oauth2.sysadmin_group_name', None)
-        # Hack to let us manage sysadmin rights without even if we can't configure the UM
-        self.sysadmin_email_domain = config.get('ckan.oauth2.sysadmin_email_domain', None)
+        self.legacy_idm = six.text_type(os.environ.get('CKAN_OAUTH2_LEGACY_IDM', toolkit.config.get('ckan.oauth2.legacy_idm', ''))).strip().lower() in ("true", "1", "on")
+        self.authorization_endpoint = six.text_type(os.environ.get('CKAN_OAUTH2_AUTHORIZATION_ENDPOINT', toolkit.config.get('ckan.oauth2.authorization_endpoint', ''))).strip()
+        self.token_endpoint = six.text_type(os.environ.get('CKAN_OAUTH2_TOKEN_ENDPOINT', toolkit.config.get('ckan.oauth2.token_endpoint', ''))).strip()
+        self.profile_api_url = six.text_type(os.environ.get('CKAN_OAUTH2_PROFILE_API_URL', toolkit.config.get('ckan.oauth2.profile_api_url', ''))).strip()
+        self.client_id = six.text_type(os.environ.get('CKAN_OAUTH2_CLIENT_ID', toolkit.config.get('ckan.oauth2.client_id', ''))).strip()
+        self.client_secret = six.text_type(os.environ.get('CKAN_OAUTH2_CLIENT_SECRET', toolkit.config.get('ckan.oauth2.client_secret', ''))).strip()
+        self.scope = six.text_type(os.environ.get('CKAN_OAUTH2_SCOPE', toolkit.config.get('ckan.oauth2.scope', ''))).strip()
+        self.rememberer_name = six.text_type(os.environ.get('CKAN_OAUTH2_REMEMBER_NAME', toolkit.config.get('ckan.oauth2.rememberer_name', 'auth_tkt'))).strip()
+        self.profile_api_user_field = six.text_type(os.environ.get('CKAN_OAUTH2_PROFILE_API_USER_FIELD', toolkit.config.get('ckan.oauth2.profile_api_user_field', ''))).strip()
+        self.profile_api_fullname_field = six.text_type(os.environ.get('CKAN_OAUTH2_PROFILE_API_FULLNAME_FIELD', toolkit.config.get('ckan.oauth2.profile_api_fullname_field', ''))).strip()
+        self.profile_api_mail_field = six.text_type(os.environ.get('CKAN_OAUTH2_PROFILE_API_MAIL_FIELD', toolkit.config.get('ckan.oauth2.profile_api_mail_field', ''))).strip()
+        self.profile_api_groupmembership_field = six.text_type(os.environ.get('CKAN_OAUTH2_PROFILE_API_GROUPMEMBERSHIP_FIELD', toolkit.config.get('ckan.oauth2.profile_api_groupmembership_field', ''))).strip()
+        self.sysadmin_group_name = six.text_type(os.environ.get('CKAN_OAUTH2_SYSADMIN_GROUP_NAME', toolkit.config.get('ckan.oauth2.sysadmin_group_name', ''))).strip()
 
+        self.redirect_uri = urljoin(urljoin(toolkit.config.get('ckan.site_url', 'http://localhost:5000'), toolkit.config.get('ckan.root_path')), constants.REDIRECT_URL)
 
         # Init db
         db.init_db(model)
 
-        if not self.authorization_endpoint or not self.token_endpoint or not self.client_id or not self.client_secret \
-                or not self.profile_api_url or not self.profile_api_user_field or not self.profile_api_mail_field:
-            raise ValueError('authorization_endpoint, token_endpoint, client_id, client_secret, '
-                             'profile_api_url, profile_api_user_field and profile_api_mail_field are required')
-
-    def _redirect_uri(self, request):
-        return ''.join([request.host_url, constants.REDIRECT_URL])
+        missing = [key for key in REQUIRED_CONF if getattr(self, key, "") == ""]
+        if missing:
+            raise ValueError("Missing required oauth2 conf: %s" % ", ".join(missing))
+        elif self.scope == "":
+            self.scope = None
 
     def challenge(self, came_from_url):
         # This function is called by the log in function when the user is not logged in
         state = generate_state(came_from_url)
-        oauth = OAuth2Session(self.client_id, redirect_uri=self._redirect_uri(toolkit.request), scope=self.scope, state=state)
+        oauth = OAuth2Session(self.client_id, redirect_uri=self.redirect_uri, scope=self.scope, state=state)
         auth_url, _ = oauth.authorization_url(self.authorization_endpoint)
-        toolkit.response.status = 302
-        toolkit.response.location = auth_url
         log.debug('Challenge: Redirecting challenge to page {0}'.format(auth_url))
+        # CKAN 2.6 only supports bytes
+        return toolkit.redirect_to(auth_url.encode('utf-8'))
 
     def get_token(self):
-        oauth = OAuth2Session(self.client_id, redirect_uri=self._redirect_uri(toolkit.request), scope=self.scope)
+        oauth = OAuth2Session(self.client_id, redirect_uri=self.redirect_uri, scope=self.scope)
 
         # Just because of FIWARE Authentication
         headers = {
@@ -118,9 +124,13 @@ class OAuth2Helper(object):
         return token
 
     def identify(self, token):
-        oauth = OAuth2Session(self.client_id, token=token)
         try:
-            profile_response = oauth.get(self.profile_api_url + '?access_token=%s' % token['access_token'], verify=self.verify_https)
+            if self.legacy_idm:
+                profile_response = requests.get(self.profile_api_url + '?access_token=%s' % token['access_token'], verify=self.verify_https)
+            else:
+                oauth = OAuth2Session(self.client_id, token=token)
+                profile_response = oauth.get(self.profile_api_url, verify=self.verify_https)
+
         except requests.exceptions.SSLError as e:
             # TODO search a better way to detect invalid certificates
             if "verify failed" in six.text_type(e):
@@ -157,15 +167,13 @@ class OAuth2Helper(object):
             user.name = user_name
 
             # Update fullname
-            if self.profile_api_fullname_field and self.profile_api_fullname_field in user_data:
+            if self.profile_api_fullname_field != "" and self.profile_api_fullname_field in user_data:
                 user.fullname = user_data[self.profile_api_fullname_field]
 
             # Update sysadmin status
-            if self.profile_api_groupmembership_field and self.profile_api_groupmembership_field in user_data:
-                if self.sysadmin_group_name and self.sysadmin_group_name in user_data[self.profile_api_groupmembership_field]:
-                    user.sysadmin = True
-                else:
-                    user.sysadmin = False
+            if self.profile_api_groupmembership_field != "" and self.profile_api_groupmembership_field in user_data:
+                user.sysadmin = self.sysadmin_group_name in user_data[self.profile_api_groupmembership_field]
+
             # Hack to let us manage sysadmin rights without even if we can't configure the UM
             if self.sysadmin_email_domain in email:
                 user.sysadmin = True
