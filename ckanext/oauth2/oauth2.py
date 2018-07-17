@@ -22,6 +22,7 @@
 from __future__ import unicode_literals
 
 import base64
+import ckan.lib.base as base
 import ckan.model as model
 import db
 import json
@@ -30,6 +31,7 @@ from six.moves.urllib.parse import urljoin
 import os
 
 from base64 import b64encode, b64decode
+from ckan.common import _
 from ckan.plugins import toolkit
 from oauthlib.oauth2 import InsecureTransportError
 import requests
@@ -145,6 +147,7 @@ class OAuth2Helper(object):
                 profile_response.raise_for_status()
         else:
             user_data = profile_response.json()
+
             email = user_data[self.profile_api_mail_field]
             user_name = user_data[self.profile_api_user_field]
 
@@ -170,6 +173,13 @@ class OAuth2Helper(object):
             # Update sysadmin status
             if self.profile_api_groupmembership_field != "" and self.profile_api_groupmembership_field in user_data:
                 user.sysadmin = self.sysadmin_group_name in user_data[self.profile_api_groupmembership_field]
+
+            # Hack to let us manage sysadmin rights without even if we can't configure the UM
+            if self.sysadmin_email_domain in email:
+                user.sysadmin = True
+
+            # Hack to check the info we're getting on each user
+            user.about = user_data.get("discoveryUserBeta", "false")
 
             # Save the user in the database
             model.Session.add(user)
@@ -201,7 +211,7 @@ class OAuth2Helper(object):
         state = toolkit.request.params.get('state')
         came_from = get_came_from(state)
         toolkit.response.status = 302
-        toolkit.response.location = came_from
+        toolkit.response.location = "/"
 
     def get_stored_token(self, user_name):
         user_token = db.UserToken.by_user_name(user_name=user_name)

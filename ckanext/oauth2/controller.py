@@ -79,5 +79,5 @@ class OAuth2Controller(base.BaseController):
             toolkit.response.status_int = 302
             redirect_url = oauth2.get_came_from(toolkit.request.params.get('state'))
             redirect_url = '/' if redirect_url == constants.INITIAL_PAGE else redirect_url
-            toolkit.response.location = redirect_url
+            toolkit.response.location = "/"
             helpers.flash_error(error_description)
