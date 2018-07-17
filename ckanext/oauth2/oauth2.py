@@ -22,7 +22,6 @@
 from __future__ import unicode_literals
 
 import base64
-import ckan.lib.base as base
 import ckan.model as model
 import db
 import json
@@ -31,7 +30,6 @@ from six.moves.urllib.parse import urljoin
 import os
 
 from base64 import b64encode, b64decode
-from ckan.common import _
 from ckan.plugins import toolkit
 from oauthlib.oauth2 import InsecureTransportError
 import requests
@@ -76,6 +74,8 @@ class OAuth2Helper(object):
         self.profile_api_mail_field = six.text_type(os.environ.get('CKAN_OAUTH2_PROFILE_API_MAIL_FIELD', toolkit.config.get('ckan.oauth2.profile_api_mail_field', ''))).strip()
         self.profile_api_groupmembership_field = six.text_type(os.environ.get('CKAN_OAUTH2_PROFILE_API_GROUPMEMBERSHIP_FIELD', toolkit.config.get('ckan.oauth2.profile_api_groupmembership_field', ''))).strip()
         self.sysadmin_group_name = six.text_type(os.environ.get('CKAN_OAUTH2_SYSADMIN_GROUP_NAME', toolkit.config.get('ckan.oauth2.sysadmin_group_name', ''))).strip()
+        # Hack to let us manage sysadmin rights without even if we can't configure the UM
+        self.sysadmin_email_domain = six.text_type(os.environ.get('CKAN_OAUTH2_SYSADMIN_EMAIL_DOMAIN', toolkit.config.get('ckan.oauth2.sysadmin_email_domain', ''))).strip()
 
         self.redirect_uri = urljoin(urljoin(toolkit.config.get('ckan.site_url', 'http://localhost:5000'), toolkit.config.get('ckan.root_path')), constants.REDIRECT_URL)
 
